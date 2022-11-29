@@ -1,0 +1,72 @@
+version: 2
+
+models:
+
+  # In the first 2 models we are deliberately creating a bunch of duplicate PK/UK to test
+  # that DBT_CONSTRAINTS doesn't try to create constraints multiple times.
+  # This also shows how to apply PK/UK tests inline, with one column
+  # and with multiple columns
+  - name: hub_customer
+    columns:
+      - name: CUSTOMER_PK
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null       
+  - name: hub_lineitem
+    columns:
+      - name: LINEITEM_PK
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null
+  - name: hub_nation
+    columns:
+      - name: NATION_PK
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null
+  - name: hub_order
+    columns:
+      - name: ORDER_PK
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null
+  - name: hub_part
+    columns:
+      - name: PART_PK
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null
+  - name: hub_region
+    columns:
+      - name: REGION_PK
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null
+  - name: hub_supplier
+    columns:
+      - name: SUPPLIER_PK
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null
+  - name: sat_inv_inventory_details
+    columns:
+      - name: INVENTORY_HASHDIFF
+        description: "Primary key for this table"
+        tests:
+          - dbt_constraints.primary_key
+          - unique
+          - not_null

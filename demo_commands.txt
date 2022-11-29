@@ -1,0 +1,4 @@
+dbt run --select tag:raw
+dbt run --select tag:stage
+dbt run --select tag:raw_vault
+

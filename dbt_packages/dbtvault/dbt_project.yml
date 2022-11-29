@@ -1,0 +1,20 @@
+name: dbtvault
+version: 0.7.8
+require-dbt-version: [">=0.20.0", "<=1.2.1"]
+config-version: 2
+
+model-paths: ["models"]
+analysis-paths: ["analysis"]
+test-paths: ["tests"]
+seed-paths: ["data"]
+macro-paths: ["macros"]
+docs-paths: ["docs"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_modules"
+
+vars:
+  hash: MD5
+  max_datetime: '{{ dbtvault.max_datetime() }}'
