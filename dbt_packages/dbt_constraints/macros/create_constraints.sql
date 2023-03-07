@@ -3,7 +3,7 @@
 
 {%- test primary_key(model,
         column_name=none, column_names=[],
-        quote_columns=false) -%}
+        quote_columns=false, constraint_name=none) -%}
 
     {%- if column_names|count == 0 and column_name -%}
         {%- do column_names.append(column_name) -%}
@@ -16,7 +16,7 @@
 
 {%- test unique_key(model,
         column_name=none, column_names=[],
-        quote_columns=false) -%}
+        quote_columns=false, constraint_name=none) -%}
 
     {%- if column_names|count == 0 and column_name -%}
         {%- do column_names.append(column_name) -%}
@@ -31,7 +31,7 @@
         column_name=none, fk_column_name=none, fk_column_names=[],
         pk_table_name=none, to=none,
         pk_column_name=none, pk_column_names=[], field=none,
-        quote_columns=false) -%}
+        quote_columns=false, constraint_name=none) -%}
 
     {%- if pk_column_names|count == 0 and (pk_column_name or field) -%}
         {%- do pk_column_names.append( (pk_column_name or field) ) -%}
@@ -50,41 +50,45 @@
 
 {#- Define three create macros for PK, UK, and FK that can be overridden by DB implementations -#}
 
-{%- macro create_primary_key(table_model, column_names, verify_permissions, quote_columns=false) -%}
-    {{ return(adapter.dispatch('create_primary_key', 'dbt_constraints')(table_model, column_names, verify_permissions, quote_columns)) }}
+{%- macro create_primary_key(table_model, column_names, verify_permissions, quote_columns=false, constraint_name=none, lookup_cache=none) -%}
+    {{ return(adapter.dispatch('create_primary_key', 'dbt_constraints')(table_model, column_names, verify_permissions, quote_columns, constraint_name, lookup_cache)) }}
 {%- endmacro -%}
 
 
-{%- macro create_unique_key(table_model, column_names, verify_permissions, quote_columns=false) -%}
-    {{ return(adapter.dispatch('create_unique_key', 'dbt_constraints')(table_model, column_names, verify_permissions, quote_columns)) }}
+{%- macro create_unique_key(table_model, column_names, verify_permissions, quote_columns=false, constraint_name=none, lookup_cache=none) -%}
+    {{ return(adapter.dispatch('create_unique_key', 'dbt_constraints')(table_model, column_names, verify_permissions, quote_columns, constraint_name, lookup_cache)) }}
 {%- endmacro -%}
 
 
-{%- macro create_foreign_key(pk_model, pk_column_names, fk_model, fk_column_names, verify_permissions, quote_columns=false) -%}
-    {{ return(adapter.dispatch('create_foreign_key', 'dbt_constraints')(pk_model, pk_column_names, fk_model, fk_column_names, verify_permissions, quote_columns)) }}
+{%- macro create_foreign_key(pk_table_relation, pk_column_names, fk_table_relation, fk_column_names, verify_permissions, quote_columns, constraint_name, lookup_cache) -%}
+    {{ return(adapter.dispatch('create_foreign_key', 'dbt_constraints')(pk_table_relation, pk_column_names, fk_table_relation, fk_column_names, verify_permissions, quote_columns, constraint_name, lookup_cache)) }}
 {%- endmacro -%}
 
+
+{%- macro create_not_null(table_relation, column_names, verify_permissions, quote_columns, lookup_cache) -%}
+    {{ return(adapter.dispatch('create_not_null', 'dbt_constraints')(table_relation, column_names, verify_permissions, quote_columns, lookup_cache)) }}
+{%- endmacro -%}
 
 
 {#- Define two macros for detecting if PK, UK, and FK exist that can be overridden by DB implementations -#}
 
-{%- macro unique_constraint_exists(table_relation, column_names) -%}
-    {{ return(adapter.dispatch('unique_constraint_exists', 'dbt_constraints')(table_relation, column_names) ) }}
+{%- macro unique_constraint_exists(table_relation, column_names, lookup_cache) -%}
+    {{ return(adapter.dispatch('unique_constraint_exists', 'dbt_constraints')(table_relation, column_names, lookup_cache) ) }}
 {%- endmacro -%}
 
-{%- macro foreign_key_exists(table_relation, column_names) -%}
-    {{ return(adapter.dispatch('foreign_key_exists', 'dbt_constraints')(table_relation, column_names)) }}
+{%- macro foreign_key_exists(table_relation, column_names, lookup_cache) -%}
+    {{ return(adapter.dispatch('foreign_key_exists', 'dbt_constraints')(table_relation, column_names, lookup_cache)) }}
 {%- endmacro -%}
 
 
 {#- Define two macros for detecting if we have sufficient privileges that can be overridden by DB implementations -#}
 
-{%- macro have_references_priv(table_relation, verify_permissions) -%}
-    {{ return(adapter.dispatch('have_references_priv', 'dbt_constraints')(table_relation, verify_permissions) ) }}
+{%- macro have_references_priv(table_relation, verify_permissions, lookup_cache) -%}
+    {{ return(adapter.dispatch('have_references_priv', 'dbt_constraints')(table_relation, verify_permissions, lookup_cache) ) }}
 {%- endmacro -%}
 
-{%- macro have_ownership_priv(table_relation, verify_permissions) -%}
-    {{ return(adapter.dispatch('have_ownership_priv', 'dbt_constraints')(table_relation, verify_permissions)) }}
+{%- macro have_ownership_priv(table_relation, verify_permissions, lookup_cache) -%}
+    {{ return(adapter.dispatch('have_ownership_priv', 'dbt_constraints')(table_relation, verify_permissions, lookup_cache)) }}
 {%- endmacro -%}
 
 
@@ -95,6 +99,11 @@
   {{ return(adapter.dispatch('truncate_relation')(relation)) }}
 {% endmacro %}
 
+{#- Override dbt's drop_relation macro to allow us to create adapter specific versions that drop constraints -#}
+
+{% macro drop_relation(relation) -%}
+  {{ return(adapter.dispatch('drop_relation')(relation)) }}
+{% endmacro %}
 
 
 
@@ -110,28 +119,39 @@
             'unique_combination_of_columns',
             'unique',
             'foreign_key',
-            'relationships'],
+            'relationships',
+            'not_null'],
         quote_columns=false) -%}
-    {%- if execute and var('dbt_constraints_enabled', false) -%}
+    {%- if execute and var('dbt_constraints_enabled', false) and results -%}
         {%- do log("Running dbt Constraints", info=true) -%}
 
+        {%- set lookup_cache = {
+            "table_columns": { },
+            "table_privileges": { },
+            "unique_keys": { },
+            "not_null_col": { },
+            "foreign_keys": { } } -%}
+
+        {%- if 'not_null' in constraint_types -%}
+            {%- do dbt_constraints.create_constraints_by_type(['not_null'], quote_columns, lookup_cache) -%}
+        {%- endif -%}
         {%- if 'primary_key' in constraint_types -%}
-            {%- do dbt_constraints.create_constraints_by_type(['primary_key'], quote_columns) -%}
+            {%- do dbt_constraints.create_constraints_by_type(['primary_key'], quote_columns, lookup_cache) -%}
         {%- endif -%}
         {%- if 'unique_key' in constraint_types -%}
-            {%- do dbt_constraints.create_constraints_by_type(['unique_key'], quote_columns) -%}
+            {%- do dbt_constraints.create_constraints_by_type(['unique_key'], quote_columns, lookup_cache) -%}
         {%- endif -%}
         {%- if 'unique_combination_of_columns' in constraint_types -%}
-            {%- do dbt_constraints.create_constraints_by_type(['unique_combination_of_columns'], quote_columns) -%}
+            {%- do dbt_constraints.create_constraints_by_type(['unique_combination_of_columns'], quote_columns, lookup_cache) -%}
         {%- endif -%}
         {%- if 'unique' in constraint_types -%}
-            {%- do dbt_constraints.create_constraints_by_type(['unique'], quote_columns) -%}
+            {%- do dbt_constraints.create_constraints_by_type(['unique'], quote_columns, lookup_cache) -%}
         {%- endif -%}
         {%- if 'foreign_key' in constraint_types -%}
-            {%- do dbt_constraints.create_constraints_by_type(['foreign_key'], quote_columns) -%}
+            {%- do dbt_constraints.create_constraints_by_type(['foreign_key'], quote_columns, lookup_cache) -%}
         {%- endif -%}
         {%- if 'relationships' in constraint_types -%}
-            {%- do dbt_constraints.create_constraints_by_type(['relationships'], quote_columns) -%}
+            {%- do dbt_constraints.create_constraints_by_type(['relationships'], quote_columns, lookup_cache) -%}
         {%- endif -%}
 
         {%- do log("Finished dbt Constraints", info=true) -%}
@@ -143,7 +163,7 @@
 
 
 {#- This macro is called internally and passed which constraint types to create. -#}
-{%- macro create_constraints_by_type(constraint_types, quote_columns) -%}
+{%- macro create_constraints_by_type(constraint_types, quote_columns, lookup_cache) -%}
 
     {#- Loop through the results and find all tests that passed and match the constraint_types -#}
     {#- Issue #2: added condition that the where config must be empty -#}
@@ -161,13 +181,12 @@
         {#- Find the table models that are referenced by this test.
             These models must be physical tables and cannot be sources -#}
         {%- set table_models = [] -%}
-        {%- for node in graph.nodes.values()
-            | selectattr("resource_type", "equalto", "model")
-            | selectattr("unique_id", "in", test_model.depends_on.nodes)
-            if node.config.materialized in( ("table", "incremental", "snapshot") ) -%}
+        {%- for node in graph.nodes.values() | selectattr("unique_id", "in", test_model.depends_on.nodes)
+                if node.resource_type in ( ( "model", "snapshot", "seed") )
+                    if node.config.materialized in( ("table", "incremental", "snapshot", "seed") ) -%}
 
-                {#- Append to our list of models for this test -#}
-                {%- do table_models.append(node) -%}
+                        {#- Append to our list of models &or snapshots for this test -#}
+                        {%- do table_models.append(node) -%}
 
         {% endfor %}
 
@@ -176,6 +195,7 @@
                 ( var('dbt_constraints_sources_pk_enabled', false) and test_model.test_metadata.name in("primary_key") )
              or ( var('dbt_constraints_sources_uk_enabled', false) and test_model.test_metadata.name in("unique_key", "unique_combination_of_columns", "unique") )
              or ( var('dbt_constraints_sources_fk_enabled', false) and test_model.test_metadata.name in("foreign_key", "relationships") )
+             or ( var('dbt_constraints_sources_nn_enabled', false) and test_model.test_metadata.name in("not_null") )
             ) -%}
             {%- for node in graph.sources.values()
                 | selectattr("resource_type", "equalto", "source")
@@ -214,11 +234,12 @@
                 database=table_models[0].database,
                 schema=table_models[0].schema,
                 identifier=table_models[0].alias ) -%}
-            {%- if dbt_constraints.table_columns_all_exist(table_relation, column_names) -%}
+            {%- if dbt_constraints.table_columns_all_exist(table_relation, column_names, lookup_cache) -%}
                 {%- if test_model.test_metadata.name == "primary_key" -%}
-                    {%- do dbt_constraints.create_primary_key(table_relation, column_names, ns.verify_permissions, quote_columns) -%}
+                    {%- do dbt_constraints.create_not_null(table_relation, column_names, ns.verify_permissions, quote_columns, lookup_cache) -%}
+                    {%- do dbt_constraints.create_primary_key(table_relation, column_names, ns.verify_permissions, quote_columns, test_parameters.constraint_name, lookup_cache) -%}
                 {%- else  -%}
-                    {%- do dbt_constraints.create_unique_key(table_relation, column_names, ns.verify_permissions, quote_columns) -%}
+                    {%- do dbt_constraints.create_unique_key(table_relation, column_names, ns.verify_permissions, quote_columns, test_parameters.constraint_name, lookup_cache) -%}
                 {%- endif -%}
             {%- else  -%}
                 {%- do log("Skipping primary/unique key because a physical column name was not found on the table: " ~ table_models[0].name ~ " " ~ column_names, info=true) -%}
@@ -231,12 +252,12 @@
 
             {%- set fk_model = none -%}
             {%- set pk_model = none -%}
-            {%- set fk_model_names = modules.re.findall( "models\W+(\w+)" , test_model.file_key_name)  -%}
+            {%- set fk_model_names = modules.re.findall( "(models|snapshots|seeds)\W+(\w+)" , test_model.file_key_name)  -%}
             {%- set fk_source_names = modules.re.findall( "source\W+(\w+)\W+(\w+)" , test_parameters.model)  -%}
 
             {%- if 1 == fk_model_names | count -%}
-                {%- set fk_model = table_models | selectattr("name", "equalto", fk_model_names[0]) | first -%}
-                {%- set pk_model = table_models | rejectattr("name", "equalto", fk_model_names[0]) | first -%}
+                {%- set fk_model = table_models | selectattr("name", "equalto", fk_model_names[0][1]) | first -%}
+                {%- set pk_model = table_models | rejectattr("name", "equalto", fk_model_names[0][1]) | first -%}
             {%- elif 1 == fk_source_names | count  -%}
                 {%- if table_models[0].source_name == fk_source_names[0][0] and table_models[0].name == fk_source_names[0][1] -%}
                     {%- set fk_model = table_models[0] -%}
@@ -287,16 +308,47 @@
                     ) }}
                 {%- endif -%}
 
-                {%- if not dbt_constraints.table_columns_all_exist(pk_table_relation, pk_column_names) -%}
+                {%- if not dbt_constraints.table_columns_all_exist(pk_table_relation, pk_column_names, lookup_cache) -%}
                     {%- do log("Skipping foreign key because a physical column was not found on the pk table: " ~ pk_model.name ~ " " ~ pk_column_names, info=true) -%}
-                {%- elif not dbt_constraints.table_columns_all_exist(fk_table_relation, fk_column_names) -%}
+                {%- elif not dbt_constraints.table_columns_all_exist(fk_table_relation, fk_column_names, lookup_cache) -%}
                     {%- do log("Skipping foreign key because a physical column was not found on the fk table: " ~ fk_model.name ~ " " ~ fk_column_names, info=true) -%}
                 {%- else  -%}
-                    {%- do dbt_constraints.create_foreign_key(pk_table_relation, pk_column_names, fk_table_relation, fk_column_names, ns.verify_permissions, quote_columns) -%}
+                    {%- do dbt_constraints.create_foreign_key(pk_table_relation, pk_column_names, fk_table_relation, fk_column_names, ns.verify_permissions, quote_columns, test_parameters.constraint_name, lookup_cache) -%}
                 {%- endif -%}
             {%- else  -%}
                 {%- do log("Skipping foreign key because a we couldn't find the child table: model=" ~ fk_model_names ~ " or source=" ~ fk_source_names, info=true) -%}
             {%- endif -%}
+
+        {#- We only create NN if there is one model referenced by the test
+            and if all the columns exist as physical columns on the table -#}
+        {%- elif 1 == table_models|count
+            and test_model.test_metadata.name in("not_null") -%}
+
+            {# Attempt to identify a parameter we can use for the column names #}
+            {%- set column_names = [] -%}
+            {%- if  test_parameters.column_names -%}
+                {%- set column_names =  test_parameters.column_names -%}
+            {%- elif  test_parameters.combination_of_columns -%}
+                {%- set column_names =  test_parameters.combination_of_columns -%}
+            {%- elif  test_parameters.column_name -%}
+                {%- set column_names =  [test_parameters.column_name] -%}
+            {%- else  -%}
+                {{ exceptions.raise_compiler_error(
+                "`column_names` or `column_name` parameter missing for not null constraint on table: '" ~ table_models[0].name
+                ) }}
+            {%- endif -%}
+
+            {%- set table_relation = api.Relation.create(
+                database=table_models[0].database,
+                schema=table_models[0].schema,
+                identifier=table_models[0].alias ) -%}
+
+            {%- if dbt_constraints.table_columns_all_exist(table_relation, column_names, lookup_cache) -%}
+                {%- do dbt_constraints.create_not_null(table_relation, column_names, ns.verify_permissions, quote_columns, lookup_cache) -%}
+            {%- else  -%}
+                {%- do log("Skipping not null constraint because a physical column name was not found on the table: " ~ table_models[0].name ~ " " ~ column_names, info=true) -%}
+            {%- endif -%}
+
         {%- endif -%}
 
     {%- endfor -%}
@@ -306,13 +358,8 @@
 
 
 {# This macro tests that all the column names passed to the macro can be found on the table, ignoring case #}
-{%- macro table_columns_all_exist(table_relation, column_list) -%}
-    {%- set tab_Columns = adapter.get_columns_in_relation(table_relation) -%}
-
-    {%- set tab_column_list = [] -%}
-    {%- for column in tab_Columns -%}
-        {{ tab_column_list.append(column.name|upper) }}
-    {%- endfor -%}
+{%- macro table_columns_all_exist(table_relation, column_list, lookup_cache) -%}
+    {%- set tab_column_list = dbt_constraints.lookup_table_columns(table_relation, lookup_cache) -%}
 
     {%- for column in column_list|map('upper') if column not in tab_column_list -%}
         {{ return(false) }}
@@ -321,6 +368,24 @@
 
 {%- endmacro -%}
 
+
+{%- macro lookup_table_columns(table_relation, lookup_cache) -%}
+    {{ return(adapter.dispatch('lookup_table_columns', 'dbt_constraints')(table_relation, lookup_cache)) }}
+{%- endmacro -%}
+
+
+{%- macro default__lookup_table_columns(table_relation, lookup_cache) -%}
+    {%- if table_relation not in lookup_cache.table_columns -%}
+        {%- set tab_Columns = adapter.get_columns_in_relation(table_relation) -%}
+
+        {%- set tab_column_list = [] -%}
+        {%- for column in tab_Columns -%}
+            {{ tab_column_list.append(column.name|upper) }}
+        {%- endfor -%}
+        {%- do lookup_cache.table_columns.update({ table_relation: tab_column_list }) -%}
+    {%- endif -%}
+    {{ return(lookup_cache.table_columns[table_relation]) }}
+{%- endmacro -%}
 
 
 {# This macro allows us to compare two sets of columns to see if they are the same, ignoring case #}
@@ -338,8 +403,4 @@
     {%- else -%}
         {{ return(false) }}
     {%- endif -%}
-{%- endmacro -%}
-
-
-{%- macro drop_constraints() -%}
 {%- endmacro -%}

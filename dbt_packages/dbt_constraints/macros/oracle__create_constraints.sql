@@ -1,6 +1,6 @@
 {# Oracle specific implementation to create a primary key #}
-{%- macro oracle__create_primary_key(table_relation, column_names, verify_permissions, quote_columns=false) -%}
-    {%- set constraint_name = (table_relation.identifier ~ "_" ~ column_names|join('_') ~ "_PK") | upper -%}
+{%- macro oracle__create_primary_key(table_relation, column_names, verify_permissions, quote_columns=false, constraint_name=none, lookup_cache=none) -%}
+    {%- set constraint_name = (constraint_name or table_relation.identifier ~ "_" ~ column_names|join('_') ~ "_PK") | upper -%}
 
     {%- if constraint_name|length > 30 %}
         {%- set constraint_name_query %}
@@ -13,9 +13,9 @@
     {%- set columns_csv = dbt_constraints.get_quoted_column_csv(column_names, quote_columns) -%}
 
     {#- Check that the table does not already have this PK/UK -#}
-    {%- if not dbt_constraints.unique_constraint_exists(table_relation, column_names) -%}
+    {%- if not dbt_constraints.unique_constraint_exists(table_relation, column_names, lookup_cache) -%}
 
-        {%- if dbt_constraints.have_ownership_priv(table_relation, verify_permissions) -%}
+        {%- if dbt_constraints.have_ownership_priv(table_relation, verify_permissions, lookup_cache) -%}
 
             {%- set query -%}
 BEGIN
@@ -42,8 +42,8 @@ END;
 
 
 {# Oracle specific implementation to create a unique key #}
-{%- macro oracle__create_unique_key(table_relation, column_names, verify_permissions, quote_columns=false) -%}
-    {%- set constraint_name = (table_relation.identifier ~ "_" ~ column_names|join('_') ~ "_UK") | upper -%}
+{%- macro oracle__create_unique_key(table_relation, column_names, verify_permissions, quote_columns=false, constraint_name=none, lookup_cache=none) -%}
+    {%- set constraint_name = (constraint_name or table_relation.identifier ~ "_" ~ column_names|join('_') ~ "_UK") | upper -%}
 
     {%- if constraint_name|length > 30 %}
         {%- set constraint_name_query %}
@@ -56,9 +56,9 @@ END;
     {%- set columns_csv = dbt_constraints.get_quoted_column_csv(column_names, quote_columns) -%}
 
     {#- Check that the table does not already have this PK/UK -#}
-    {%- if not dbt_constraints.unique_constraint_exists(table_relation, column_names) -%}
+    {%- if not dbt_constraints.unique_constraint_exists(table_relation, column_names, lookup_cache) -%}
 
-        {%- if dbt_constraints.have_ownership_priv(table_relation, verify_permissions) -%}
+        {%- if dbt_constraints.have_ownership_priv(table_relation, verify_permissions, lookup_cache) -%}
 
             {%- set query -%}
 BEGIN
@@ -85,8 +85,8 @@ END;
 
 
 {# Oracle specific implementation to create a foreign key #}
-{%- macro oracle__create_foreign_key(pk_table_relation, pk_column_names, fk_table_relation, fk_column_names, verify_permissions, quote_columns=true) -%}
-    {%- set constraint_name = (fk_table_relation.identifier ~ "_" ~ fk_column_names|join('_') ~ "_FK") | upper -%}
+{%- macro oracle__create_foreign_key(pk_table_relation, pk_column_names, fk_table_relation, fk_column_names, verify_permissions, quote_columns, constraint_name, lookup_cache) -%}
+    {%- set constraint_name = (constraint_name or fk_table_relation.identifier ~ "_" ~ fk_column_names|join('_') ~ "_FK") | upper -%}
 
     {%- if constraint_name|length > 30 %}
         {%- set constraint_name_query %}
@@ -99,11 +99,11 @@ END;
     {%- set fk_columns_csv = dbt_constraints.get_quoted_column_csv(fk_column_names, quote_columns) -%}
     {%- set pk_columns_csv = dbt_constraints.get_quoted_column_csv(pk_column_names, quote_columns) -%}
     {#- Check that the PK table has a PK or UK -#}
-    {%- if dbt_constraints.unique_constraint_exists(pk_table_relation, pk_column_names) -%}
+    {%- if dbt_constraints.unique_constraint_exists(pk_table_relation, pk_column_names, lookup_cache) -%}
         {#- Check if the table already has this foreign key -#}
         {%- if not dbt_constraints.foreign_key_exists(fk_table_relation, fk_column_names) -%}
 
-            {%- if dbt_constraints.have_ownership_priv(fk_table_relation, verify_permissions) and dbt_constraints.have_references_priv(pk_table_relation, verify_permissions) -%}
+            {%- if dbt_constraints.have_ownership_priv(fk_table_relation, verify_permissions, lookup_cache) and dbt_constraints.have_references_priv(pk_table_relation, verify_permissions) -%}
 
                 {%- set query -%}
 BEGIN
@@ -130,11 +130,36 @@ END;
 
 {%- endmacro -%}
 
+{# Oracle specific implementation to create a not null constraint #}
+{%- macro oracle__create_not_null(table_relation, column_names, verify_permissions, quote_columns, lookup_cache) -%}
+    {%- set columns_list = dbt_constraints.get_quoted_column_list(column_names, quote_columns) -%}
 
+    {%- if dbt_constraints.have_ownership_priv(table_relation, verify_permissions) -%}
 
+            {%- set modify_statements= [] -%}
+            {%- for column in columns_list -%}
+                {%- set modify_statements = modify_statements.append( column ~ " NOT NULL" ) -%}
+            {%- endfor -%}
+            {%- set modify_statement_csv = modify_statements | join(", ") -%}
+            {%- set query -%}
+BEGIN
+    EXECUTE IMMEDIATE 'ALTER TABLE {{table_relation}} MODIFY ( {{ modify_statement_csv }} )';
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.ENABLE(BUFFER_SIZE => NULL);
+        DBMS_OUTPUT.PUT_LINE('Unable to create constraint: ' || SQLERRM);
+END;
+            {%- endset -%}
+            {%- do log("Creating not null constraint for: " ~ columns_list | join(", ") ~ " in " ~ table_relation, info=true) -%}
+            {%- do run_query(query) -%}
+
+    {%- else -%}
+        {%- do log("Skipping not null constraint for " ~ columns_list | join(", ") ~ " in " ~ table_relation ~ " because of insufficient privileges: " ~ table_relation, info=true) -%}
+    {%- endif -%}
+{%- endmacro -%}
 {#- This macro is used in create macros to avoid duplicate PK/UK constraints
     and to skip FK where no PK/UK constraint exists on the parent table -#}
-{%- macro oracle__unique_constraint_exists(table_relation, column_names) -%}
+{%- macro oracle__unique_constraint_exists(table_relation, column_names, lookup_cache) -%}
     {%- set lookup_query -%}
 select
     cols.constraint_name as "constraint_name",
@@ -168,7 +193,7 @@ order by 1, 2
 
 
 {#- This macro is used in create macros to avoid duplicate FK constraints -#}
-{%- macro oracle__foreign_key_exists(table_relation, column_names) -%}
+{%- macro oracle__foreign_key_exists(table_relation, column_names, lookup_cache) -%}
     {%- set lookup_query -%}
 select
     cols.constraint_name as "fk_name",
@@ -200,11 +225,84 @@ order by 1, 2
 {%- endmacro -%}
 
 {#- Oracle lacks a simple way to verify privileges so we will instead use an exception handler -#}
-{%- macro oracle__have_references_priv(table_relation, verify_permissions) -%}
+{%- macro oracle__have_references_priv(table_relation, verify_permissions, lookup_cache) -%}
     {{ return(true) }}
 {%- endmacro -%}
 
 {#- Oracle lacks a simple way to verify privileges so we will instead use an exception handler -#}
-{%- macro oracle__have_ownership_priv(table_relation, verify_permissions) -%}
+{%- macro oracle__have_ownership_priv(table_relation, verify_permissions, lookup_cache) -%}
     {{ return(true) }}
 {%- endmacro -%}
+
+{% macro oracle__drop_referential_constraints(relation) -%}
+    {%- call statement('drop_constraint_cascade') -%}
+BEGIN
+    FOR REC IN (
+        SELECT owner, table_name, constraint_name
+        FROM all_constraints cons
+        WHERE cons.constraint_type IN ('P', 'U', 'R')
+            AND upper(cons.owner) = '{{relation.schema|upper}}'
+            AND upper(cons.table_name) = '{{relation.identifier|upper}}'
+        ORDER BY 1
+    ) LOOP
+        BEGIN
+            EXECUTE IMMEDIATE 'ALTER TABLE "'||REC.OWNER||'"."'||REC.TABLE_NAME||'" DROP CONSTRAINT "'||REC.CONSTRAINT_NAME||'" CASCADE';
+        EXCEPTION
+            WHEN OTHERS THEN
+                DBMS_OUTPUT.ENABLE(BUFFER_SIZE => NULL);
+                DBMS_OUTPUT.PUT_LINE('Unable to drop constraint: ' || SQLERRM);
+        END;
+    END LOOP;
+END;
+    {%- endcall -%}
+
+{% endmacro %}
+
+{#- Oracle will error if you try to truncate tables with FK constraints or tables with PK/UK constraints
+    referenced by FK so we will drop all constraints before truncating tables -#}
+{% macro oracle__truncate_relation(relation) -%}
+    {%- do log("Truncating table " ~ relation, info=true) -%}
+    {{ oracle__drop_referential_constraints(relation) }}
+    {{ return(adapter.dispatch('truncate_relation', 'dbt')(relation)) }}
+{% endmacro %}
+
+{#- Oracle will error if you try to drop tables with FK constraints or tables with PK/UK constraints
+    referenced by FK so we will drop all constraints before dropping tables -#}
+{% macro oracle__drop_relation(relation) -%}
+    {%- do log("Dropping table " ~ relation, info=true) -%}
+        {%- call statement('drop_constraint_cascade') -%}
+BEGIN
+    FOR REC IN (
+        SELECT owner, table_name, constraint_name
+        FROM all_constraints cons
+        WHERE cons.constraint_type IN ('P', 'U', 'R')
+            AND upper(cons.owner) = '{{relation.schema|upper}}'
+            AND upper(cons.table_name) = '{{relation.identifier|upper}}'
+        ORDER BY 1
+    ) LOOP
+        BEGIN
+            EXECUTE IMMEDIATE 'ALTER TABLE "'||REC.OWNER||'"."'||REC.TABLE_NAME||'" DROP CONSTRAINT "'||REC.CONSTRAINT_NAME||'" CASCADE';
+        EXCEPTION
+            WHEN OTHERS THEN
+                DBMS_OUTPUT.ENABLE(BUFFER_SIZE => NULL);
+                DBMS_OUTPUT.PUT_LINE('Unable to drop constraint: ' || SQLERRM);
+        END;
+    END LOOP;
+    FOR REC IN (
+        SELECT owner, table_name
+        FROM all_tables
+        WHERE upper(owner) = '{{relation.schema|upper}}'
+            AND upper(table_name) = '{{relation.identifier|upper}}'
+        ORDER BY 1
+    ) LOOP
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE "'||REC.OWNER||'"."'||REC.TABLE_NAME||'" CASCADE CONSTRAINTS';
+        EXCEPTION
+            WHEN OTHERS THEN
+                DBMS_OUTPUT.ENABLE(BUFFER_SIZE => NULL);
+                DBMS_OUTPUT.PUT_LINE('Unable to drop table: ' || SQLERRM);
+        END;
+    END LOOP;
+END;
+    {%- endcall -%}
+{% endmacro %}

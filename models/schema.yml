@@ -21,3 +21,23 @@ sources:
       - name: CUSTOMER_ADDRESS
       - name: CUSTOMER_DEMOGRAPHICS
       - name: HOUSEHOLD_DEMOGRAPHICS
+  - name: DEMO
+    database: DATA_REPOSITORY
+    schema: DEMO
+    tables:
+      - name: AIRPORT
+      - name: AIRLINE
+      - name: FLIGHT
+  - name: netflix
+    database: BRONZE
+    schema: LANDING
+    tables:
+      - name: NETFLIX_BEST_MOVIE
+      - name: NETFLIX_BEST_MOVIE_BY_YEAR
+      - name: NETFLIX_BEST_SHOW
+      - name: NETFLIX_BEST_SHOW_BY_YEAR
+      - name: NETFLIX_DATASET_MOVIE
+      - name: NETFLIX_DATASET_RATING
+      - name: NETFLIX_ORIGINALS
+      - name: NETFLIX_RAW_CREDITS
+      - name: NETFLIX_RAW_TITLES

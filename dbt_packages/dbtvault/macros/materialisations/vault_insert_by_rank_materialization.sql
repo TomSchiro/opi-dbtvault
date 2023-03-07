@@ -1,10 +1,23 @@
+/*
+ * Copyright (c) Business Thinking Ltd. 2019-2023
+ * This software includes code developed by the dbtvault Team at Business Thinking Ltd. Trading as Datavault
+ */
+
 {% materialization vault_insert_by_rank, default -%}
 
-    {%- set full_refresh_mode = flags.FULL_REFRESH -%}
+    {% if target.type == "postgres" and execute %}
+        {{ exceptions.raise_compiler_error("The vault_insert_by_rank materialisation is currently unavailable on Postgres.") }}
+    {% endif %}
 
-    {%- set target_relation = this -%}
+    {%- set full_refresh_mode = (should_full_refresh()) -%}
+
+    {% if target.type == "sqlserver" %}
+        {%- set target_relation = this.incorporate(type='table') -%}
+    {%  else %}
+        {%- set target_relation = this -%}
+    {% endif %}
     {%- set existing_relation = load_relation(this) -%}
-    {%- set tmp_relation = make_temp_relation(this) -%}
+    {%- set tmp_relation = make_temp_relation(target_relation) -%}
 
     {%- set rank_column = config.require('rank_column') -%}
     {%- set rank_source_models = config.require('rank_source_models') -%}
@@ -27,19 +40,17 @@
 
         {% do to_drop.append(tmp_relation) %}
 
-    {% elif existing_relation.is_view or full_refresh_mode %}
-        {#-- Make sure the backup doesn't exist so we don't encounter issues with the rename below #}
-        {% set backup_identifier = existing_relation.identifier ~ "__dbt_backup" %}
-        {% set backup_relation = existing_relation.incorporate(path={"identifier": backup_identifier}) %}
+    {% elif existing_relation.is_view %}
 
-        {% do adapter.drop_relation(backup_relation) %}
-        {% do adapter.rename_relation(target_relation, backup_relation) %}
+        {{ log("Dropping relation " ~ target_relation ~ " because it is a view and this model is a table (vault_insert_by_rank).") }}
+        {% do adapter.drop_relation(existing_relation) %}
 
         {% set filtered_sql = dbtvault.replace_placeholder_with_rank_filter(sql, rank_column, 1) %}
         {% set build_sql = create_table_as(False, target_relation, filtered_sql) %}
 
-        {% do to_drop.append(tmp_relation) %}
-        {% do to_drop.append(backup_relation) %}
+    {% elif full_refresh_mode %}
+        {% set filtered_sql = dbtvault.replace_placeholder_with_rank_filter(sql, rank_column, 1) %}
+        {% set build_sql = create_table_as(False, target_relation, filtered_sql) %}
     {% else %}
 
         {% set target_columns = adapter.get_columns_in_relation(target_relation) %}
@@ -54,7 +65,7 @@
 
             {{ dbt_utils.log_info("Running for {} {} of {} on column '{}' [{}]".format('rank', iteration_number, min_max_ranks.max_rank, rank_column, model.unique_id)) }}
 
-            {% set tmp_relation = make_temp_relation(this) %}
+            {% set tmp_relation = make_temp_relation(target_relation) %}
 
             {# This call statement drops and then creates a temporary table #}
             {# but MSSQL will fail to drop any temporary table created by a previous loop iteration #}
@@ -76,9 +87,14 @@
             {%- endcall %}
 
             {% set result = load_result(insert_query_name) %}
-
             {% if 'response' in result.keys() %} {# added in v0.19.0 #}
-                {% set rows_inserted = result['response']['rows_affected'] %}
+                {# Investigate for Databricks #}
+                {%- if result['response']['rows_affected'] == None %}
+                    {% set rows_inserted = 0 %}
+                {%- else %}
+                    {% set rows_inserted = result['response']['rows_affected'] %}
+                {%- endif %}
+
             {% else %} {# older versions #}
                 {% set rows_inserted = result['status'].split(" ")[2] | int %}
             {% endif %}
@@ -91,7 +107,14 @@
                                                                                           rows_inserted,
                                                                                           model.unique_id)) }}
 
-            {% do to_drop.append(tmp_relation) %}
+            {# In databricks and sqlserver a temporary view/table can only be dropped by #}
+            {# the connection or session that created it so drop it now before the commit below closes this session #}                                                                            model.unique_id)) }}
+            {% if target.type in ['databricks', 'sqlserver'] %}
+                {{ dbtvault.drop_temporary_special(tmp_relation) }}
+            {% else %}
+                {% do to_drop.append(tmp_relation) %}
+            {% endif %}
+
             {% do adapter.commit() %}
 
         {% endfor %}
@@ -129,6 +152,8 @@
             {% do adapter.drop_relation(rel) %}
         {% endif %}
     {% endfor %}
+
+    {% set target_relation = target_relation.incorporate(type='table') %}
 
     {{ run_hooks(post_hooks, inside_transaction=False) }}
 

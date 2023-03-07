@@ -21,30 +21,96 @@ vars:
   load_date: '1992-01-08'
   tpch_size: 10 #1, 10, 100, 1000, 10000
 
+
 models:
   dbtvault_snowflake_demo:
-    raw_stage:
-      tags:
-        - 'raw'
-      materialized: view
-    stage:
-      tags:
-        - 'stage'
-      enabled: true
-      materialized: view
-    raw_vault:
-      tags:
-        - 'raw_vault'
-      materialized: incremental
-      hubs:
-        tags:
-          - 'hub'
-      links:
-        tags:
-          - 'link'
-      sats:
-        tags:
-          - 'satellite'
-      t_links:
-        tags:
-          - 't_link'
+    bronze:
+      database: bronze
+      audit:
+        schema: audit
+        raw_stage:
+          tags:
+            - 'raw_stage'
+        stage:
+          tags:
+            - 'stage'
+          enabled: true
+          materialized: view
+          sales_demo:
+            tags:
+              - 'sales_demo'
+              - 'stage_sales_demo'
+            materialized: view
+          flight_demo:
+            tags:
+              - 'demo'
+              - 'stage_flight_demo'
+            materialized: view
+        raw_vault:
+          tags:
+            - 'raw_vault'
+          materialized: incremental
+          hubs:
+            tags:
+              - 'hub'
+            sales_demo:
+              tags:
+                - 'sales_demo'
+                - 'hub_sales_demo'
+              materialized: incremental
+            flight_demo:
+              tags:
+                - 'demo'
+                - 'hub_flight_demo'
+              materialized: incremental
+          links:
+            tags:
+              - 'link'
+            flight_demo:
+              tags:
+                - 'demo'
+                - 'link_flight_demo'
+            sales_demo:
+              tags:
+                - 'sales_demo'
+                - 'link_sales_demo'
+              materialized: incremental
+          sats:
+            tags:
+              - 'satellite'
+            sales_demo:
+              tags:
+                - 'sales_demo'
+                - 'sat_sales_demo'
+              materialized: incremental
+            flight_demo:
+              tags:
+                - 'demo'
+                - 'sat_flight_demo'
+          t_links:
+            tags:
+              - 't_link'
+      landing:
+        schema: landing
+        raw:
+          sales_demo:
+            tags:
+              - 'sales_demo'
+              - 'raw_stage_sales_demo'
+            materialized: table
+          flight_demo:
+            tags:
+              - 'demo'
+              - 'raw_stage_flight_demo'
+            materialized: table
+        stage:
+          sales_demo:
+            tags:
+              - 'sales_demo'
+              - 'stg_stage_sales_demo'
+            materialized: table
+          flight_demo:
+            tags:
+              - 'demo'
+              - 'stg_stage_flight_demo'
+            materialized: table
